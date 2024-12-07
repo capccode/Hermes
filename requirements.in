@@ -1,0 +1,12 @@
+pip-tools
+dagster
+PyGithub
+matplotlib
+pandas
+nbconvert
+nbformat
+ipykernel
+jupytext
+json
+plotly.express
+python-dotenv

@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+setup.cfg
+setup.py
+clinimatch_Hermes/__init__.py
+clinimatch_Hermes/assets.py
+clinimatch_Hermes/definitions.py
+clinimatch_Hermes.egg-info/PKG-INFO
+clinimatch_Hermes.egg-info/SOURCES.txt
+clinimatch_Hermes.egg-info/dependency_links.txt
+clinimatch_Hermes.egg-info/requires.txt
+clinimatch_Hermes.egg-info/top_level.txt
