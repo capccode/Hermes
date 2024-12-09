@@ -10,11 +10,6 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from github import Github, GithubException, InputFileContent
 from dagster import asset, AssetExecutionContext
 from dotenv import load_dotenv
-from io import StringIO
-from IPython.display import display, HTML
-import plotly.io as pio
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
 
 # Load environment variables from a .env file if present
 load_dotenv()
