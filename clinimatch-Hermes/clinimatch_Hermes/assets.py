@@ -10,6 +10,11 @@ from nbconvert.preprocessors import ExecutePreprocessor
 from github import Github, GithubException, InputFileContent
 from dagster import asset, AssetExecutionContext
 from dotenv import load_dotenv
+from io import StringIO
+from IPython.display import display, HTML
+import plotly.io as pio
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 
 # Load environment variables from a .env file if present
 load_dotenv()
@@ -20,49 +25,143 @@ if not ACCESS_TOKEN:
     raise ValueError("GITHUB_ACCESS_TOKEN environment variable not set")
 
 
-# Define the notebook template with placeholders for serialized data
-NOTEBOOK_TEMPLATE = """
-import json
+# Define the notebook template in two parts
+NOTEBOOK_TEMPLATE_START = '''
 import pandas as pd
 import plotly.express as px
-from io import StringIO
+from IPython.display import display, HTML
+import plotly.io as pio
 
-# Load the data
-serialized_data = {serialized_data}
-# Wrap the serialized_data string in StringIO
-github_stargazers_by_week = pd.read_json(StringIO(serialized_data), orient="split")
+# The data will be injected here as a pandas DataFrame
+data = '''
 
-print("Loaded DataFrame Columns:", github_stargazers_by_week.columns.tolist())
-print("Loaded DataFrame Head:\\n", github_stargazers_by_week.head())
+NOTEBOOK_TEMPLATE_END = '''
 
-# Convert 'week' from milliseconds to datetime
-github_stargazers_by_week['week'] = pd.to_datetime(github_stargazers_by_week['week'], unit='ms')
+# Ensure proper datetime conversion
+data['week'] = pd.to_datetime(data['week'])
+print("Loaded DataFrame Columns:", data.columns.tolist())
+print("Loaded DataFrame Head:\\n", data.head())
 
-# Plot the data using Plotly
-df_last_year = github_stargazers_by_week.tail(52)
-fig = px.bar(
-    df_last_year,
-    x='week',
-    y='count',
-    title='GitHub Stars by Week (Last 52 Weeks)',
-    labels={'week': 'Week', 'count': 'Star Count'},
-    template='plotly_white'
+# Group by week to ensure we don't have duplicate dates
+weekly_data = data.groupby('week')['count'].sum().reset_index()
+weekly_data['cumulative_stars'] = weekly_data['count'].cumsum()
+weekly_data['month'] = weekly_data['week'].dt.to_period('M')
+monthly_data = weekly_data.groupby('month')['count'].sum().reset_index()
+
+# Create an interactive dashboard
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+
+# Create three subplots
+fig = make_subplots(
+    rows=3, 
+    cols=1,
+    subplot_titles=(
+        'Monthly Star Growth Heatmap',
+        'Star Acquisition Trend',
+        'Monthly Distribution'
+    ),
+    vertical_spacing=0.1,
+    specs=[[{"type": "heatmap"}],
+           [{"type": "scatter"}],
+           [{"type": "violin"}]]
 )
 
-# Enhance the plot
+# 1. Heatmap of stars by month and year
+weekly_data['year'] = weekly_data['week'].dt.year
+weekly_data['month_num'] = weekly_data['week'].dt.month
+heatmap_data = weekly_data.pivot_table(
+    values='count',
+    index='year',
+    columns='month_num',
+    aggfunc='sum',
+    fill_value=0
+)
+
+fig.add_trace(
+    go.Heatmap(
+        z=heatmap_data.values,
+        x=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+        y=heatmap_data.index,
+        colorscale='Viridis',
+        name='Monthly Stars'
+    ),
+    row=1, col=1
+)
+
+# 2. Trend line with moving average
+weekly_data['MA7'] = weekly_data['count'].rolling(window=7).mean()
+fig.add_trace(
+    go.Scatter(
+        x=weekly_data['week'],
+        y=weekly_data['count'],
+        mode='markers',
+        name='Weekly Stars',
+        marker=dict(size=6, color='rgba(255, 182, 193, 0.7)')
+    ),
+    row=2, col=1
+)
+
+fig.add_trace(
+    go.Scatter(
+        x=weekly_data['week'],
+        y=weekly_data['MA7'],
+        mode='lines',
+        name='7-week Moving Average',
+        line=dict(color='rgba(255, 0, 0, 0.8)', width=2)
+    ),
+    row=2, col=1
+)
+
+# 3. Violin plot for monthly distribution
+fig.add_trace(
+    go.Violin(
+        y=weekly_data['count'],
+        name='Star Distribution',
+        box_visible=True,
+        meanline_visible=True,
+        fillcolor='lightseagreen',
+        line_color='darkgreen'
+    ),
+    row=3, col=1
+)
+
+# Update layout
 fig.update_layout(
-    xaxis_title='Week',
-    yaxis_title='Star Count',
-    xaxis_tickangle=-45
+    height=1200,
+    width=1000,
+    showlegend=True,
+    template='plotly_dark',
+    title_text="Dagster GitHub Stars Analysis - Advanced Visualization",
+    title_x=0.5,
 )
 
-fig.update_xaxes(
-    tickformat="%b %d, %Y",  # Formats dates as "Jan 01, 2023"
-    tickangle=-45
-)
+# Update axes labels
+fig.update_xaxes(title_text="Month", row=1, col=1)
+fig.update_yaxes(title_text="Year", row=1, col=1)
+fig.update_xaxes(title_text="Date", row=2, col=1)
+fig.update_yaxes(title_text="Star Count", row=2, col=1)
+fig.update_xaxes(title_text="", row=3, col=1)
+fig.update_yaxes(title_text="Stars Distribution", row=3, col=1)
 
+# Force static image rendering in addition to interactive plot
+import plotly.io as pio
+pio.write_image(fig, 'temp_plot.png')
+from IPython.display import Image
+display(Image('temp_plot.png'))
+
+# Also display interactive version
 fig.show()
-"""
+
+# Calculate and display statistics
+print("\\nDetailed Statistics:")
+print(f"Total stars: {weekly_data['count'].sum():,}")
+print(f"Average stars per week: {weekly_data['count'].mean():.1f}")
+print(f"Median stars per week: {weekly_data['count'].median():.1f}")
+print(f"Highest stars in a week: {weekly_data['count'].max()}")
+print(f"Total weeks tracked: {len(weekly_data)}")
+print(f"Most active month: {monthly_data.loc[monthly_data['count'].idxmax(), 'month']}")
+'''
 
 
 @asset
@@ -87,7 +186,7 @@ def github_stargazers() -> pd.DataFrame:
         {"user": stargazer.user.login, "starred_at": stargazer.starred_at}
         for stargazer in stargazers
     ]
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(data)   
     return df
 
 
@@ -96,6 +195,7 @@ def github_stargazers_by_week(github_stargazers: pd.DataFrame) -> pd.DataFrame:
     github_stargazers["starred_at"] = pd.to_datetime(github_stargazers["starred_at"], errors='coerce')
     # Drop rows with NaT in 'starred_at'
     github_stargazers = github_stargazers.dropna(subset=["starred_at"])
+    print(f'keys:', github_stargazers.keys())
     github_stargazers["week"] = github_stargazers["starred_at"].apply(
         lambda x: x - timedelta(days=x.weekday())  # Start of the week (Monday)
     )
@@ -107,7 +207,7 @@ def github_stargazers_by_week(github_stargazers: pd.DataFrame) -> pd.DataFrame:
     )
     if df.empty:
         raise ValueError("Aggregated DataFrame is empty. No valid 'week' data available.")
-    print("Aggregated DataFrame:\n", df.head())  # Debugging line
+    # print("Aggregated DataFrame:\n", df.head())  # Debugging line
     return df
 
 
@@ -116,31 +216,38 @@ def github_stargazers_by_week(github_stargazers: pd.DataFrame) -> pd.DataFrame:
 def github_stars_notebook(github_stargazers_by_week: pd.DataFrame) -> str:
     """
     Generates a Jupyter notebook that visualizes GitHub stars by week using Plotly.
-
-    Args:
-        github_stargazers_by_week (pd.DataFrame): Aggregated stargazers data by week.
-
-    Returns:
-        str: The serialized notebook in JSON format.
     """
-    # Serialize the DataFrame to JSON
-    serialized_data = github_stargazers_by_week.to_json(orient="split")
-    print("Serialized Data:", serialized_data)  # Debugging line
-
-    # Create a notebook object using the template
-    notebook_content = NOTEBOOK_TEMPLATE.format(serialized_data=json.dumps(serialized_data))
+    # Ensure we have the required packages
+    notebook_setup = '''
+    !pip install -q plotly kaleido
+    '''
+    
+    # Convert timestamps to strings before converting to dict
+    df_copy = github_stargazers_by_week.copy()
+    df_copy['week'] = df_copy['week'].dt.strftime('%Y-%m-%d')
+    
+    # Convert the DataFrame to a Python literal representation
+    df_repr = df_copy.to_dict()
+    df_code = f"pd.DataFrame({df_repr})"
+    
     notebook = new_notebook()
-    notebook.cells.append(new_code_cell(notebook_content))
+    # Add setup cell
+    notebook.cells.append(new_code_cell(notebook_setup))
+    # Add main content cell
+    notebook.cells.append(new_code_cell(
+        NOTEBOOK_TEMPLATE_START + 
+        df_code + 
+        NOTEBOOK_TEMPLATE_END
+    ))
 
     # Execute the notebook
     ep = ExecutePreprocessor(timeout=600, kernel_name="python3")
     try:
         ep.preprocess(notebook, resources={})
     except Exception as e:
-        print("Notebook Execution Error:", e)  # Debugging line
+        print("Notebook Execution Error:", e)
         raise RuntimeError(f"Error executing notebook: {str(e)}") from e
 
-    # Serialize the notebook into JSON format
     return nbformat.writes(notebook)
 
 
